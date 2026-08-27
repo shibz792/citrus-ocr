@@ -19,9 +19,15 @@ type Page = {
 };
 
 type RunState = "idle" | "preparing" | "running" | "done" | "error";
+type ExportFormat = "txt" | "md" | "json";
 
 const PROMPT_PRESETS = ["document parsing.", "free OCR.", "OCR:"];
 const ACCEPT = "image/png,image/jpeg,image/webp,application/pdf";
+const EXPORT_FORMATS: { format: ExportFormat; label: string }[] = [
+  { format: "txt", label: "Plain text (.txt)" },
+  { format: "md", label: "Markdown (.md)" },
+  { format: "json", label: "JSON (.json)" },
+];
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -80,9 +86,11 @@ export function OcrTester() {
   const [prepareMessage, setPrepareMessage] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const [sourceName, setSourceName] = useState<string>("");
+  const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const downloadMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     return () => {
@@ -91,6 +99,17 @@ export function OcrTester() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!downloadMenuOpen) return;
+    const onClickOutside = (e: MouseEvent) => {
+      if (!downloadMenuRef.current?.contains(e.target as Node)) {
+        setDownloadMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [downloadMenuOpen]);
 
   const updatePage = useCallback((id: string, patch: Partial<Page>) => {
     setPages((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
@@ -182,15 +201,45 @@ export function OcrTester() {
     .join("\n\n")
     .trim();
 
-  const download = useCallback(() => {
-    const blob = new Blob([combinedText], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${(sourceName || "ocr-result").replace(/\.[^.]+$/, "")}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [combinedText, sourceName]);
+  const buildExport = useCallback(
+    (format: ExportFormat): { content: string; mime: string; ext: string } => {
+      if (format === "json") {
+        return {
+          content: JSON.stringify(
+            { pages: pages.map((p, i) => ({ page: i + 1, text: p.text })) },
+            null,
+            2,
+          ),
+          mime: "application/json;charset=utf-8",
+          ext: "json",
+        };
+      }
+      if (format === "md") {
+        const content =
+          pages.length > 1
+            ? pages.map((p, i) => `## Page ${i + 1}\n\n${p.text}`).join("\n\n").trim()
+            : (pages[0]?.text ?? "").trim();
+        return { content, mime: "text/markdown;charset=utf-8", ext: "md" };
+      }
+      return { content: combinedText, mime: "text/plain;charset=utf-8", ext: "txt" };
+    },
+    [pages, combinedText],
+  );
+
+  const download = useCallback(
+    (format: ExportFormat) => {
+      const { content, mime, ext } = buildExport(format);
+      const blob = new Blob([content], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(sourceName || "ocr-result").replace(/\.[^.]+$/, "")}.${ext}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setDownloadMenuOpen(false);
+    },
+    [buildExport, sourceName],
+  );
 
   const copy = useCallback(() => {
     navigator.clipboard.writeText(combinedText).catch(() => {});
@@ -325,17 +374,8 @@ export function OcrTester() {
         </div>
 
         <p className="text-xs leading-relaxed text-foreground-muted">
-          Runs against the public{" "}
-          <a
-            className="underline hover:text-citrus-pink"
-            href="https://huggingface.co/spaces/baidu/Unlimited-OCR"
-            target="_blank"
-            rel="noreferrer"
-          >
-            baidu/Unlimited-OCR
-          </a>{" "}
-          Space on a shared ZeroGPU — first requests can take a minute to wake the
-          model up, and busy periods may queue.
+          Citrus OCR runs on shared cloud GPUs, so the first request can take a
+          minute to spin up, and busy periods may briefly queue.
         </p>
       </div>
 
@@ -382,13 +422,50 @@ export function OcrTester() {
                 >
                   Copy all
                 </button>
-                <button
-                  onClick={download}
-                  disabled={!combinedText}
-                  className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-foreground-muted transition-colors hover:border-citrus-pink hover:text-citrus-pink disabled:opacity-40"
-                >
-                  Download .txt
-                </button>
+                <div className="relative" ref={downloadMenuRef}>
+                  <button
+                    onClick={() => setDownloadMenuOpen((v) => !v)}
+                    disabled={!combinedText}
+                    aria-haspopup="menu"
+                    aria-expanded={downloadMenuOpen}
+                    className="flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-foreground-muted transition-colors hover:border-citrus-pink hover:text-citrus-pink disabled:opacity-40"
+                  >
+                    Download
+                    <svg
+                      aria-hidden
+                      width="10"
+                      height="10"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      className={`transition-transform ${downloadMenuOpen ? "rotate-180" : ""}`}
+                    >
+                      <path
+                        d="M6 9l6 6 6-6"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                  {downloadMenuOpen && (
+                    <div
+                      role="menu"
+                      className="absolute right-0 z-10 mt-1.5 w-44 overflow-hidden rounded-lg border border-border bg-surface shadow-lg"
+                    >
+                      {EXPORT_FORMATS.map(({ format, label }) => (
+                        <button
+                          key={format}
+                          role="menuitem"
+                          onClick={() => download(format)}
+                          className="block w-full px-3 py-2 text-left text-xs font-medium text-foreground-muted transition-colors hover:bg-surface-muted hover:text-citrus-pink"
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
             <pre className="flex-1 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-sm leading-relaxed">

@@ -53,7 +53,7 @@ export async function POST(req: Request) {
       };
 
       try {
-        send({ type: "status", message: "Connecting to the Unlimited-OCR Space…" });
+        send({ type: "status", message: "Connecting…" });
 
         const client = await Client.connect(SPACE_ID);
         const job = client.submit("/run_ocr", {
@@ -69,7 +69,7 @@ export async function POST(req: Request) {
                 type: "error",
                 message:
                   (typeof msg.message === "string" && msg.message) ||
-                  "The Space reported an error while processing this page.",
+                  "Something went wrong while processing this page.",
               });
               continue;
             }
@@ -96,7 +96,7 @@ export async function POST(req: Request) {
           message:
             err instanceof Error
               ? err.message
-              : "Something went wrong talking to the Unlimited-OCR Space.",
+              : "Something went wrong processing this page.",
         });
       } finally {
         closed = true;

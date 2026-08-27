@@ -14,36 +14,13 @@ export function Header() {
           />
           <span className="hidden h-6 w-px bg-border sm:block" aria-hidden />
           <span className="hidden text-sm font-medium text-foreground-muted sm:block">
-            OCR Lab
+            Citrus OCR
           </span>
         </div>
 
-        <nav className="flex items-center gap-5 text-sm font-medium text-foreground-muted">
-          <a
-            className="transition-colors hover:text-citrus-pink"
-            href="https://github.com/baidu/Unlimited-OCR"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Unlimited-OCR
-          </a>
-          <a
-            className="hidden transition-colors hover:text-citrus-pink sm:inline"
-            href="https://huggingface.co/spaces/baidu/Unlimited-OCR"
-            target="_blank"
-            rel="noreferrer"
-          >
-            HF Space
-          </a>
-          <a
-            className="rounded-full bg-citrus-charcoal px-4 py-2 text-white transition-colors hover:bg-citrus-pink"
-            href="https://github.com/shibz792/citrus-ocr"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Source
-          </a>
-        </nav>
+        <span className="rounded-full bg-citrus-teal-soft px-3.5 py-1.5 text-xs font-semibold text-citrus-teal">
+          Beta
+        </span>
       </div>
     </header>
   );

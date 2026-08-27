@@ -14,16 +14,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Citrus OCR — Unlimited-OCR tester",
+  title: "Citrus OCR",
   description:
-    "A live testing interface for Baidu's Unlimited-OCR model, built by Citrus Global. Upload an image or PDF and watch one-shot, long-horizon document parsing stream in real time.",
-  keywords: [
-    "OCR",
-    "Unlimited-OCR",
-    "Baidu",
-    "document parsing",
-    "Citrus Global",
-  ],
+    "Citrus OCR turns any photo, scan, or PDF into clean text, instantly. Upload a document and watch it get read in real time — no install, no GPU required.",
+  keywords: ["OCR", "document parsing", "PDF to text", "Citrus Global", "Citrus OCR"],
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

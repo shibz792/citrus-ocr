@@ -13,13 +13,13 @@ export default function Home() {
             Live model, real inference
           </span>
           <h1 className="mt-4 text-3xl font-extrabold tracking-tight sm:text-4xl">
-            Test Baidu&apos;s{" "}
-            <span className="text-citrus-pink">Unlimited-OCR</span> in your browser
+            <span className="text-citrus-pink">Citrus OCR</span> reads any
+            document, instantly
           </h1>
           <p className="mt-3 text-foreground-muted">
-            One-shot, long-horizon document parsing. Drop in a photo, scan, or
-            multi-page PDF and watch the model read it token by token — no
-            install, no GPU of your own required.
+            Drop in a photo, scan, or multi-page PDF and watch it turn into
+            clean text token by token — no install, no GPU of your own
+            required.
           </p>
         </div>
         <OcrTester />
