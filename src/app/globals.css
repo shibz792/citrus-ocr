@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+:root {
+  --background: #fbfaf8;
+  --surface: #ffffff;
+  --surface-muted: #f4f1ec;
+  --foreground: #1c1c1e;
+  --foreground-muted: #57595b;
+  --border: #e7e2d9;
+
+  --citrus-pink: #ef4770;
+  --citrus-pink-dark: #d32e57;
+  --citrus-pink-soft: #fde8ed;
+  --citrus-charcoal: #57595b;
+  --citrus-teal: #06d59c;
+  --citrus-teal-soft: #e2fbf3;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-foreground: var(--foreground);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-border: var(--border);
+
+  --color-citrus-pink: var(--citrus-pink);
+  --color-citrus-pink-dark: var(--citrus-pink-dark);
+  --color-citrus-pink-soft: var(--citrus-pink-soft);
+  --color-citrus-charcoal: var(--citrus-charcoal);
+  --color-citrus-teal: var(--citrus-teal);
+  --color-citrus-teal-soft: var(--citrus-teal-soft);
+
+  --font-sans: var(--font-jakarta);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #131315;
+    --surface: #1b1b1e;
+    --surface-muted: #221f22;
+    --foreground: #f4f1ec;
+    --foreground-muted: #b7b3ae;
+    --border: #302d2e;
+
+    --citrus-pink-soft: #3a1c26;
+    --citrus-teal-soft: #0c2e27;
+  }
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+::selection {
+  background: var(--citrus-teal);
+  color: #0c2e27;
+}
+
+@keyframes citrus-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.citrus-spin {
+  animation: citrus-spin 1s linear infinite;
+}
+
+@keyframes citrus-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.citrus-pulse {
+  animation: citrus-pulse 1.4s ease-in-out infinite;
+}
