@@ -55,16 +55,26 @@ export async function POST(req: Request) {
       try {
         send({ type: "status", message: "Connecting…" });
 
-        const client = await Client.connect(SPACE_ID);
+        // An anonymous connection shares ZeroGPU quota with every other
+        // anonymous caller of this Space — including, in practice, everyone
+        // else hitting it from Vercel's shared egress IPs. Authenticating
+        // with a (free) Hugging Face token gives this app its own quota
+        // instead. Falls back to anonymous if HF_TOKEN isn't set.
+        const hfToken = process.env.HF_TOKEN as `hf_${string}` | undefined;
+        const client = await Client.connect(SPACE_ID, hfToken ? { token: hfToken } : undefined);
         const job = client.submit("/run_ocr", {
           image_path: file,
           mode,
           prompt,
         });
 
+        let sawError = false;
+        let receivedText = false;
+
         for await (const msg of job) {
           if (msg.type === "status") {
             if (msg.stage === "error") {
+              sawError = true;
               send({
                 type: "error",
                 message:
@@ -84,12 +94,25 @@ export async function POST(req: Request) {
           } else if (msg.type === "data") {
             const payload = Array.isArray(msg.data) ? (msg.data[0] as OcrPayload) : undefined;
             if (payload) {
+              if (payload.text) receivedText = true;
               send({ type: "token", text: payload.text ?? "", done: !!payload.done });
             }
           }
         }
 
-        send({ type: "complete" });
+        // A shared, free GPU can drop a job without ever surfacing an error
+        // (silently timed out in queue, evicted mid-run, etc). Never let that
+        // look like a successful, empty result — surface it as a failure so
+        // the page can be retried instead.
+        if (!sawError && !receivedText) {
+          send({
+            type: "error",
+            message:
+              "The model didn't return any text — the shared GPU may be overloaded right now. Try again in a moment.",
+          });
+        } else if (!sawError) {
+          send({ type: "complete" });
+        }
       } catch (err) {
         send({
           type: "error",

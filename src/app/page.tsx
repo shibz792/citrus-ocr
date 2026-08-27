@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { OcrTester } from "@/components/OcrTester";
@@ -17,14 +18,30 @@ export default function Home() {
             document, instantly
           </h1>
           <p className="mt-3 text-foreground-muted">
-            Drop in a photo, scan, or multi-page PDF and watch it turn into
-            clean text token by token — no install, no GPU of your own
-            required.
+            Drop in photos, scans, or multi-page PDFs — even several at once —
+            and watch them turn into clean text token by token. See the exact
+            layout it detected, then export to Word, PDF, Markdown, or
+            structured JSON.
           </p>
+          <ul className="mt-4 flex flex-wrap gap-x-5 gap-y-1.5 text-sm text-foreground-muted">
+            <Feature>Batch upload</Feature>
+            <Feature>Live layout detection</Feature>
+            <Feature>Word &amp; PDF export</Feature>
+            <Feature>No install required</Feature>
+          </ul>
         </div>
         <OcrTester />
       </main>
       <Footer />
     </>
+  );
+}
+
+function Feature({ children }: { children: ReactNode }) {
+  return (
+    <li className="flex items-center gap-1.5">
+      <span className="h-1 w-1 rounded-full bg-citrus-pink" aria-hidden />
+      {children}
+    </li>
   );
 }

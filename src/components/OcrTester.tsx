@@ -1,36 +1,53 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pdfToImageBlobs } from "@/lib/pdf";
 import { streamNdjson } from "@/lib/streamNdjson";
 import { cleanOcrText } from "@/lib/cleanOcrText";
+import { parseLayoutBlocks } from "@/lib/parseLayout";
+import { buildTxt, buildExport, type ExportFormat, type ExportPage } from "@/lib/exporters";
+import { StructuredBlocks } from "@/components/StructuredBlocks";
+import { LayoutOverlay } from "@/components/LayoutOverlay";
 
 type Mode = "gundam" | "base";
 type PageStatus = "queued" | "running" | "done" | "error";
+type ViewMode = "text" | "structured" | "layout";
 
 type Page = {
   id: string;
   blob: Blob;
   previewUrl: string;
+  sourceLabel: string;
   text: string;
+  rawText: string;
   status: PageStatus;
   statusMessage: string;
   elapsedMs: number;
 };
 
 type RunState = "idle" | "preparing" | "running" | "done" | "error";
-type ExportFormat = "txt" | "md" | "json";
 
 const PROMPT_PRESETS = ["document parsing.", "free OCR.", "OCR:"];
 const ACCEPT = "image/png,image/jpeg,image/webp,application/pdf";
+const VIEWS: { id: ViewMode; label: string }[] = [
+  { id: "text", label: "Text" },
+  { id: "structured", label: "Structured" },
+  { id: "layout", label: "Layout" },
+];
 const EXPORT_FORMATS: { format: ExportFormat; label: string }[] = [
   { format: "txt", label: "Plain text (.txt)" },
   { format: "md", label: "Markdown (.md)" },
-  { format: "json", label: "JSON (.json)" },
+  { format: "docx", label: "Word (.docx)" },
+  { format: "pdf", label: "PDF (.pdf)" },
+  { format: "json", label: "Structured JSON (.json)" },
 ];
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
+}
+
+function toExportPages(pages: Page[]): ExportPage[] {
+  return pages.map((p) => ({ sourceLabel: p.sourceLabel, text: p.text, rawText: p.rawText }));
 }
 
 async function runOcrOnPage(
@@ -40,13 +57,19 @@ async function runOcrOnPage(
   signal: AbortSignal,
   onUpdate: (patch: Partial<Page>) => void,
 ) {
-  onUpdate({ status: "running", statusMessage: "Connecting…", text: "" });
+  onUpdate({ status: "running", statusMessage: "Connecting…", text: "", rawText: "" });
   const startedAt = Date.now();
 
   const form = new FormData();
   form.append("file", page.blob, "page.png");
   form.append("mode", mode);
   form.append("prompt", prompt);
+
+  // The final "done" event replaces the stream with the model's cleaned
+  // save-file text, which has already had its <|det|> layout markers
+  // stripped. Keep the last chunk that *had* markers around separately, so
+  // the structured/layout views still have something to parse afterwards.
+  let lastRawWithMarkup = "";
 
   try {
     const res = await fetch("/api/ocr", { method: "POST", body: form, signal });
@@ -59,7 +82,12 @@ async function runOcrOnPage(
       if (event.type === "status") {
         onUpdate({ statusMessage: event.message });
       } else if (event.type === "token") {
-        onUpdate({ text: cleanOcrText(event.text), elapsedMs: Date.now() - startedAt });
+        if (!event.done) lastRawWithMarkup = event.text;
+        onUpdate({
+          text: cleanOcrText(event.text),
+          rawText: lastRawWithMarkup || event.text,
+          elapsedMs: Date.now() - startedAt,
+        });
       } else if (event.type === "error") {
         throw new Error(event.message);
       }
@@ -80,13 +108,15 @@ async function runOcrOnPage(
 export function OcrTester() {
   const [pages, setPages] = useState<Page[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [view, setView] = useState<ViewMode>("text");
   const [mode, setMode] = useState<Mode>("gundam");
   const [prompt, setPrompt] = useState(PROMPT_PRESETS[0]);
   const [runState, setRunState] = useState<RunState>("idle");
   const [prepareMessage, setPrepareMessage] = useState("");
   const [dragActive, setDragActive] = useState(false);
-  const [sourceName, setSourceName] = useState<string>("");
+  const [sourceSummary, setSourceSummary] = useState("");
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -115,39 +145,55 @@ export function OcrTester() {
     setPages((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   }, []);
 
-  const handleFile = useCallback(async (file: File) => {
+  const handleFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
     abortRef.current?.abort();
     setPages((prev) => {
       prev.forEach((p) => URL.revokeObjectURL(p.previewUrl));
       return [];
     });
     setActiveIndex(0);
-    setSourceName(file.name);
+    setView("text");
     setRunState("preparing");
 
+    const newPages: Page[] = [];
     try {
-      let blobs: Blob[];
-      if (file.type === "application/pdf") {
-        setPrepareMessage("Splitting PDF into pages…");
-        blobs = await pdfToImageBlobs(file);
-        if (blobs.length === 0) throw new Error("Couldn't read any pages from that PDF.");
-      } else {
-        blobs = [file];
+      for (const file of files) {
+        let blobs: Blob[];
+        if (file.type === "application/pdf") {
+          setPrepareMessage(
+            files.length > 1 ? `Splitting ${file.name}…` : "Splitting PDF into pages…",
+          );
+          blobs = await pdfToImageBlobs(file);
+          if (blobs.length === 0) throw new Error(`Couldn't read any pages from ${file.name}.`);
+        } else {
+          blobs = [file];
+        }
+        blobs.forEach((blob, i) => {
+          newPages.push({
+            id: uid(),
+            blob,
+            previewUrl: URL.createObjectURL(blob),
+            sourceLabel: blobs.length > 1 ? `${file.name} · page ${i + 1}` : file.name,
+            text: "",
+            rawText: "",
+            status: "queued",
+            statusMessage: "Waiting…",
+            elapsedMs: 0,
+          });
+        });
       }
 
-      const newPages: Page[] = blobs.map((blob) => ({
-        id: uid(),
-        blob,
-        previewUrl: URL.createObjectURL(blob),
-        text: "",
-        status: "queued",
-        statusMessage: "Waiting…",
-        elapsedMs: 0,
-      }));
       setPages(newPages);
+      setSourceSummary(
+        files.length === 1
+          ? files[0].name
+          : `${files.length} files · ${newPages.length} page${newPages.length === 1 ? "" : "s"}`,
+      );
       setRunState("idle");
     } catch (err) {
-      setPrepareMessage(err instanceof Error ? err.message : "Couldn't read that file.");
+      newPages.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+      setPrepareMessage(err instanceof Error ? err.message : "Couldn't read one of those files.");
       setRunState("error");
     }
   }, []);
@@ -156,10 +202,10 @@ export function OcrTester() {
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       setDragActive(false);
-      const file = e.dataTransfer.files?.[0];
-      if (file) handleFile(file);
+      const files = Array.from(e.dataTransfer.files ?? []);
+      if (files.length) handleFiles(files);
     },
-    [handleFile],
+    [handleFiles],
   );
 
   const run = useCallback(async () => {
@@ -169,21 +215,42 @@ export function OcrTester() {
     setRunState("running");
 
     let hadError = false;
-    for (const page of pages) {
+    for (let i = 0; i < pages.length; i++) {
       if (controller.signal.aborted) break;
+      const page = pages[i];
+      setActiveIndex(i);
       try {
         await runOcrOnPage(page, mode, prompt.trim() || "document parsing.", controller.signal, (patch) =>
           updatePage(page.id, patch),
         );
       } catch {
+        // One page failing (a shared, free GPU can be flaky) shouldn't stop
+        // the rest of the batch — keep going and let the user retry just
+        // the pages that failed.
         hadError = true;
-        break;
       }
     }
     if (!controller.signal.aborted) {
       setRunState(hadError ? "error" : "done");
     }
   }, [pages, mode, prompt, updatePage]);
+
+  const retryPage = useCallback(
+    async (id: string) => {
+      const page = pages.find((p) => p.id === id);
+      if (!page) return;
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        await runOcrOnPage(page, mode, prompt.trim() || "document parsing.", controller.signal, (patch) =>
+          updatePage(id, patch),
+        );
+      } catch {
+        // status already reflects the failure via onUpdate
+      }
+    },
+    [pages, mode, prompt, updatePage],
+  );
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
@@ -192,53 +259,33 @@ export function OcrTester() {
       return [];
     });
     setRunState("idle");
-    setSourceName("");
+    setSourceSummary("");
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
-  const combinedText = pages
-    .map((p, i) => (pages.length > 1 ? `--- Page ${i + 1} ---\n${p.text}` : p.text))
-    .join("\n\n")
-    .trim();
-
-  const buildExport = useCallback(
-    (format: ExportFormat): { content: string; mime: string; ext: string } => {
-      if (format === "json") {
-        return {
-          content: JSON.stringify(
-            { pages: pages.map((p, i) => ({ page: i + 1, text: p.text })) },
-            null,
-            2,
-          ),
-          mime: "application/json;charset=utf-8",
-          ext: "json",
-        };
-      }
-      if (format === "md") {
-        const content =
-          pages.length > 1
-            ? pages.map((p, i) => `## Page ${i + 1}\n\n${p.text}`).join("\n\n").trim()
-            : (pages[0]?.text ?? "").trim();
-        return { content, mime: "text/markdown;charset=utf-8", ext: "md" };
-      }
-      return { content: combinedText, mime: "text/plain;charset=utf-8", ext: "txt" };
-    },
-    [pages, combinedText],
-  );
+  const combinedText = useMemo(() => buildTxt(toExportPages(pages)), [pages]);
 
   const download = useCallback(
-    (format: ExportFormat) => {
-      const { content, mime, ext } = buildExport(format);
-      const blob = new Blob([content], { type: mime });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${(sourceName || "ocr-result").replace(/\.[^.]+$/, "")}.${ext}`;
-      a.click();
-      URL.revokeObjectURL(url);
-      setDownloadMenuOpen(false);
+    async (format: ExportFormat) => {
+      setExportingFormat(format);
+      try {
+        const { content, mime, ext } = await buildExport(format, toExportPages(pages));
+        const blob = content instanceof Blob ? content : new Blob([content], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const base =
+          (sourceSummary || "citrus-ocr").replace(/\.[^.]+$/, "").replace(/[^\w.-]+/g, "-") ||
+          "citrus-ocr";
+        a.href = url;
+        a.download = `${base}.${ext}`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } finally {
+        setExportingFormat(null);
+        setDownloadMenuOpen(false);
+      }
     },
-    [buildExport, sourceName],
+    [pages, sourceSummary],
   );
 
   const copy = useCallback(() => {
@@ -246,6 +293,10 @@ export function OcrTester() {
   }, [combinedText]);
 
   const active = pages[activeIndex];
+  const activeBlocks = useMemo(
+    () => (active ? parseLayoutBlocks(active.rawText) : []),
+    [active],
+  );
   const isBusy = runState === "running" || runState === "preparing";
 
   return (
@@ -283,17 +334,20 @@ export function OcrTester() {
             />
           </svg>
           <p className="font-medium">
-            {sourceName || "Drop an image or PDF here, or click to browse"}
+            {sourceSummary || "Drop images or PDFs here, or click to browse"}
           </p>
-          <p className="text-sm text-foreground-muted">PNG, JPG, WEBP or PDF · up to 20MB/page</p>
+          <p className="text-sm text-foreground-muted">
+            PNG, JPG, WEBP or PDF · multiple files at once · up to 20MB/page
+          </p>
           <input
             ref={fileInputRef}
             type="file"
             accept={ACCEPT}
+            multiple
             className="hidden"
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleFile(file);
+              const files = Array.from(e.target.files ?? []);
+              if (files.length) handleFiles(files);
             }}
           />
         </div>
@@ -387,14 +441,15 @@ export function OcrTester() {
               <button
                 key={p.id}
                 onClick={() => setActiveIndex(i)}
-                className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                title={p.sourceLabel}
+                className={`flex max-w-[10rem] shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
                   i === activeIndex
                     ? "bg-citrus-pink-soft text-citrus-pink"
                     : "text-foreground-muted hover:bg-surface-muted"
                 }`}
               >
                 <StatusDot status={p.status} />
-                Page {i + 1}
+                <span className="truncate">{p.sourceLabel}</span>
               </button>
             ))}
           </div>
@@ -406,7 +461,7 @@ export function OcrTester() {
           </div>
         ) : (
           <div className="flex flex-1 flex-col">
-            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
               <div className="flex items-center gap-2 text-sm">
                 <StatusDot status={active.status} />
                 <span className="text-foreground-muted">
@@ -415,6 +470,15 @@ export function OcrTester() {
                 </span>
               </div>
               <div className="flex gap-2">
+                {active.status === "error" && (
+                  <button
+                    onClick={() => retryPage(active.id)}
+                    disabled={isBusy}
+                    className="rounded-lg border border-citrus-pink px-2.5 py-1 text-xs font-medium text-citrus-pink transition-colors hover:bg-citrus-pink-soft disabled:opacity-40"
+                  >
+                    Retry page
+                  </button>
+                )}
                 <button
                   onClick={copy}
                   disabled={!combinedText}
@@ -425,12 +489,12 @@ export function OcrTester() {
                 <div className="relative" ref={downloadMenuRef}>
                   <button
                     onClick={() => setDownloadMenuOpen((v) => !v)}
-                    disabled={!combinedText}
+                    disabled={!combinedText || exportingFormat !== null}
                     aria-haspopup="menu"
                     aria-expanded={downloadMenuOpen}
                     className="flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-foreground-muted transition-colors hover:border-citrus-pink hover:text-citrus-pink disabled:opacity-40"
                   >
-                    Download
+                    {exportingFormat ? "Preparing…" : "Download"}
                     <svg
                       aria-hidden
                       width="10"
@@ -451,7 +515,7 @@ export function OcrTester() {
                   {downloadMenuOpen && (
                     <div
                       role="menu"
-                      className="absolute right-0 z-10 mt-1.5 w-44 overflow-hidden rounded-lg border border-border bg-surface shadow-lg"
+                      className="absolute right-0 z-10 mt-1.5 w-48 overflow-hidden rounded-lg border border-border bg-surface shadow-lg"
                     >
                       {EXPORT_FORMATS.map(({ format, label }) => (
                         <button
@@ -468,12 +532,41 @@ export function OcrTester() {
                 </div>
               </div>
             </div>
-            <pre className="flex-1 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-sm leading-relaxed">
-              {active.text || (active.status === "running" ? "" : "—")}
-              {active.status === "running" && (
-                <span className="citrus-pulse ml-0.5 inline-block h-4 w-1.5 translate-y-0.5 bg-citrus-teal" />
-              )}
-            </pre>
+
+            <div className="flex items-center gap-1 border-b border-border px-3 py-2">
+              {VIEWS.map((v) => (
+                <button
+                  key={v.id}
+                  onClick={() => setView(v.id)}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                    view === v.id
+                      ? "bg-citrus-pink text-white"
+                      : "text-foreground-muted hover:bg-surface-muted"
+                  }`}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+
+            {view === "text" && (
+              <pre className="flex-1 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-sm leading-relaxed">
+                {active.text || (active.status === "running" ? "" : "—")}
+                {active.status === "running" && (
+                  <span className="citrus-pulse ml-0.5 inline-block h-4 w-1.5 translate-y-0.5 bg-citrus-teal" />
+                )}
+              </pre>
+            )}
+            {view === "structured" && (
+              <div className="flex-1 overflow-auto">
+                <StructuredBlocks blocks={activeBlocks} />
+              </div>
+            )}
+            {view === "layout" && (
+              <div className="flex-1 overflow-auto">
+                <LayoutOverlay imageUrl={active.previewUrl} blocks={activeBlocks} />
+              </div>
+            )}
           </div>
         )}
       </div>
